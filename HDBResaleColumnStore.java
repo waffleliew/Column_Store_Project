@@ -295,8 +295,11 @@ class HDBResaleColumnStore {
         // One-time preprocessing step
         sortCSVByMonth(csvPath, OUTPUTCSV);
         splitCSV(OUTPUTCSV); 
+        // Generate zones for zone mapping
+        Map<String, Map<String, Integer>> zones = generateZones();
 
         try (Scanner userInput = new Scanner(System.in)) {
+            // Prompt user for matriculation number
             System.out.println("Enter Matriculation No.");
             String matricNo = userInput.nextLine();  
             System.out.println("Matriculation No: " + matricNo); 
@@ -307,6 +310,9 @@ class HDBResaleColumnStore {
             int startMonth = params.month();
             String town = params.town();
 
+
+            //// Uncomment the following to run and compare queries performance. Output result will be saved to `output` folder////
+        
             // Normal Query
             System.out.println("Running Normal Query...");
             startTime = System.currentTimeMillis();
@@ -314,28 +320,26 @@ class HDBResaleColumnStore {
             endTime = System.currentTimeMillis();
             System.out.println("Normal Query Time: " + (endTime - startTime) + " ms");
 
-            // Shared Scan Query
-            System.out.println("Running Shared Scan Query...");
-            startTime = System.currentTimeMillis();
-            ssQuery(year, startMonth, town);
-            endTime = System.currentTimeMillis();
-            System.out.println("Shared Scan Query Time: " + (endTime - startTime) + " ms");
+            // // Zone Mapping Query
+            // System.out.println("Running Zone Mapping Query...");
+            // startTime = System.currentTimeMillis();
+            // zmQuery(year, startMonth, town, zones);
+            // endTime = System.currentTimeMillis();
+            // System.out.println("Zone Mapping Query Time: " + (endTime - startTime) + " ms");
 
-            // Generate zones for zone mapping
-            Map<String, Map<String, Integer>> zones = generateZones();
-            // Zone Mapping Query
-            System.out.println("Running Zone Mapping Query...");
-            startTime = System.currentTimeMillis();
-            zmQuery(year, startMonth, town, zones);
-            endTime = System.currentTimeMillis();
-            System.out.println("Zone Mapping Query Time: " + (endTime - startTime) + " ms");
+            // // Shared Scan Query
+            // System.out.println("Running Shared Scan Query...");
+            // startTime = System.currentTimeMillis();
+            // ssQuery(year, startMonth, town);
+            // endTime = System.currentTimeMillis();
+            // System.out.println("Shared Scan Query Time: " + (endTime - startTime) + " ms");
             
-            // Zone Mapping + Shared Scan Query
-            System.out.println("Running Zone Mapping + Shared Scan Query...");
-            startTime = System.currentTimeMillis();
-            zmssQuery(year, startMonth, town, zones);
-            endTime = System.currentTimeMillis();
-            System.out.println("Zone Mapping + Shared Scan Query Time: " + (endTime - startTime) + " ms");
+            // // Zone Mapping + Shared Scan Query
+            // System.out.println("Running Zone Mapping + Shared Scan Query...");
+            // startTime = System.currentTimeMillis();
+            // zmssQuery(year, startMonth, town, zones);
+            // endTime = System.currentTimeMillis();
+            // System.out.println("Zone Mapping + Shared Scan Query Time: " + (endTime - startTime) + " ms");
 
         } catch (Exception e) {
             System.out.println("Error: " + e.getMessage());
