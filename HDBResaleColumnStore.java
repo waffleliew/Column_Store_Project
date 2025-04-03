@@ -52,29 +52,68 @@ class HDBResaleColumnStore {
     // Split the CSV file into separate files for each column in column_store directory
     public static void splitCSV(String csvPath) throws IOException {
         Files.createDirectories(Paths.get(DATA_DIR));
-        
+
         BufferedReader reader = new BufferedReader(new FileReader(csvPath));
         String header = reader.readLine(); // Read header
         String[] columns = header.split(",");
-        
+
         Map<String, BufferedWriter> writers = new HashMap<>();
         for (String col : columns) {
             writers.put(col, new BufferedWriter(new FileWriter(DATA_DIR + "/" + col + ".csv")));
         }
-        
+
+        int lineNumber = 1;
         String line;
         while ((line = reader.readLine()) != null) {
-            String[] values = line.split(",");
+            lineNumber++;
+            String[] values = line.split(",", -1); // -1 to include trailing empty strings
             for (int i = 0; i < values.length; i++) {
-                writers.get(columns[i]).write(values[i] + "\n");
+                String colName = columns[i];
+                String rawValue = values[i].trim();
+                String value = ( "".equals(rawValue) || rawValue.isEmpty() ) ? "na" : rawValue; //fills empty cells with "na" to indicate missing data
+
+                // Data Type checking for the relevant column for computing output statistics
+                if (value.equals("na")) {
+                    System.out.println("Empty cell in column '" + colName + "' at line " + lineNumber);
+                } else {
+                    if (colName.equalsIgnoreCase("month") && !value.matches("\\d{4}-\\d{2}")) {
+                        System.out.println("WARNING: Invalid month format at line " + lineNumber + ": " + value);
+                        value = "na";
+                    }
+                    if (colName.equalsIgnoreCase("town") && !value.matches("[A-Z /]+")) {    
+                        value = "na";
+                    }
+                    if (colName.equalsIgnoreCase("floor_area_sqm") && !isNumeric(value)) {
+                        System.out.println("WARNING: Invalid floor area at line " + lineNumber + ": " + value);
+                        value = "na";
+                    }            
+                    if ((colName.equalsIgnoreCase("resale_price") || colName.equalsIgnoreCase("floor_area_sqm")) &&
+                        !isNumeric(value)) {
+                        System.out.println("WARNING: Invalid number in column '" + colName + "' at line " + lineNumber + ": " + value);
+                        value = "na";
+                    }
+                }
+
+                writers.get(colName).write(value + "\n");
             }
         }
-        
+
         reader.close();
         for (BufferedWriter writer : writers.values()) {
             writer.close();
         }
+
         System.out.println("CSV split into column files in '" + DATA_DIR + "' directory.");
+    }
+
+    // Helper method to check if a string is numeric
+    private static boolean isNumeric(String s) {
+        try {
+            Double.parseDouble(s);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
     }
 
     // Generate zones based on the month file for zonemapping
@@ -111,102 +150,234 @@ class HDBResaleColumnStore {
     //// QUERIES
     // Normal Query
     public static void normalQuery(int year, int startMonth, String town) throws IOException {///////
+        long startTime = System.currentTimeMillis();
+
         List<String[]> filteredData = normalScan(year, startMonth, town, 0, Integer.MAX_VALUE);
+
+        long endTime = System.currentTimeMillis();
+        System.out.println("Query Time: " + (endTime - startTime) + " ms");
         Map<String, Double> stats = computeStatistics(filteredData);
         writeStatisticsToCSV(stats, year, startMonth, town, "output/NormalQuery_" + year + "_" + startMonth + "_" + town + ".csv");
     }
     // Zone Mapping Query
     public static void zmQuery(int year, int startMonth, String town, Map<String, Map<String, Integer>> zones) throws IOException {
-    String yearKey = String.valueOf(year);
-    if (!zones.containsKey(yearKey)) {
-        return;
-    }
+        
+        String yearKey = String.valueOf(year);
+        if (!zones.containsKey(yearKey)) {
+            return;
+        }
+        long startTime = System.currentTimeMillis();
     List<String[]> filteredData = normalScan(year, startMonth, town, zones.get(yearKey).get("start"), zones.get(yearKey).get("end"));//
+    long endTime = System.currentTimeMillis();
+    System.out.println("Query Time: " + (endTime - startTime) + " ms");
     Map<String, Double> stats = computeStatistics(filteredData);
     writeStatisticsToCSV(stats, year, startMonth, town, "output/ZMQuery_" + year + "_" + startMonth + "_" + town + ".csv");
     }
     // Shared Scan Query
     public static void ssQuery(int year, int startMonth, String town) throws IOException { ////////
+    long startTime = System.currentTimeMillis();
     List<String[]> filteredData = sharedScan(year, startMonth, town, 0, Integer.MAX_VALUE);
+    long endTime = System.currentTimeMillis();
+    System.out.println("Query Time: " + (endTime - startTime) + " ms");
     Map<String, Double> stats = computeStatistics(filteredData);
     writeStatisticsToCSV(stats, year, startMonth, town, "output/SSQuery_" + year + "_" + startMonth + "_" + town + ".csv");
     }
     // Zone Mapping + Shared Scan Query
     public static void zmssQuery(int year, int startMonth, String town, Map<String, Map<String, Integer>> zones) throws IOException {
-    String yearKey = String.valueOf(year);
-    if (!zones.containsKey(yearKey)) {
-        return;
-    }
+        String yearKey = String.valueOf(year);
+        if (!zones.containsKey(yearKey)) {
+            return;
+        }
+    long startTime = System.currentTimeMillis();
     List<String[]> filteredData = sharedScan(year, startMonth, town, zones.get(yearKey).get("start"), zones.get(yearKey).get("end"));
+    long endTime = System.currentTimeMillis();
+    System.out.println("Query Time: " + (endTime - startTime) + " ms");
     Map<String, Double> stats = computeStatistics(filteredData);
     writeStatisticsToCSV(stats, year, startMonth, town, "output/ZMSSQuery_" + year + "_" + startMonth + "_" + town + ".csv");
     }
 
 
 
-    //// Query helper functions for recyclability 
-    // As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area
-    private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
-        List<String> months = Files.readAllLines(Paths.get(DATA_DIR, "month.csv"));
-        List<Integer> pos = new ArrayList<>();
-    
-        if (zone_endIdx == Integer.MAX_VALUE) { // If zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
-            zone_endIdx = months.size();
-        } else {
-            zone_endIdx += 1;
-        }
-    
-        // Stage 1: Time filter
-        for (int i = zone_startIdx; i < zone_endIdx; i++) {
-            int monthValue = Integer.parseInt(months.get(i).substring(5, 7));
-            int yearValue = Integer.parseInt(months.get(i).substring(0, 4));
+// Query helper functions for recyclability 
+// Multi-stage filtering with column store semantics: Stage 1 (A), then B
+private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
+    List<Integer> pos = new ArrayList<>();
+
+    // Stage 1: Time filter using BufferedReader
+    BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
+    String monthLine;
+    int index = 0;
+    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1;
+
+    while ((monthLine = monthReader.readLine()) != null) {
+        if (index >= zone_startIdx && index < adjustedEnd) {
+            int monthValue = Integer.parseInt(monthLine.substring(5, 7));
+            int yearValue = Integer.parseInt(monthLine.substring(0, 4));
             if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
-                pos.add(i);
+                pos.add(index);
             }
         }
-    
-        // Stage 2: Town filter
-        List<String> towns = Files.readAllLines(Paths.get(DATA_DIR, "town.csv"));
-        pos.removeIf(idx -> !towns.get(idx).equalsIgnoreCase(town));
-    
-        // Stage 3: Area filter
-        List<String> areas = Files.readAllLines(Paths.get(DATA_DIR, "floor_area_sqm.csv"));
-        pos.removeIf(idx -> Double.parseDouble(areas.get(idx)) < 80);
-    
-        // Final: Get filtered data
-        List<String> prices = Files.readAllLines(Paths.get(DATA_DIR, "resale_price.csv"));
-        List<String[]> filtered = new ArrayList<>();
-        for (int i : pos) {
-            filtered.add(new String[]{prices.get(i), areas.get(i)});
-        }
-    
-        return filtered;
+        index++;
     }
+    monthReader.close();
+
+    // Stage 2: Town filter
+    BufferedReader townReader = new BufferedReader(new FileReader(DATA_DIR + "/town.csv"));
+    List<Integer> townFiltered = new ArrayList<>();
+    index = 0;
+    String townLine;
+    while ((townLine = townReader.readLine()) != null) {
+        if(townLine == "na"){ // null or wrong data type check
+            System.out.println("Error: Town is not available for the selected month. Please check ResalePricesSingapore.csv file.");
+            System.exit(0);
+        }
+        if (pos.contains(index) && townLine.equalsIgnoreCase(town)) {
+            townFiltered.add(index);
+        }
+        index++;
+    }
+    townReader.close();
+
+    // Stage 3: Area filter
+    BufferedReader areaReader = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
+    List<Integer> finalFiltered = new ArrayList<>();
+    index = 0;
+    String areaLine;
+    while ((areaLine = areaReader.readLine()) != null) {
+        if(areaLine == "na"){
+            System.out.println("Error: Floor area is not available for the selected month. Please check ResalePricesSingapore.csv file.");
+            System.exit(0);
+        }
+        if (townFiltered.contains(index) && Double.parseDouble(areaLine) >= 80) {
+            finalFiltered.add(index);
+        }
+        index++;
+    }
+    areaReader.close();
+
+    // Final: Fetch prices and areas for filtered positions
+    BufferedReader priceReader = new BufferedReader(new FileReader(DATA_DIR + "/resale_price.csv"));
+    BufferedReader areaReaderAgain = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
+    List<String[]> filtered = new ArrayList<>();
+    index = 0;
+    String priceLine, areaAgainLine;
+    Set<Integer> lookup = new HashSet<>(finalFiltered);
+
+    while ((priceLine = priceReader.readLine()) != null && (areaAgainLine = areaReaderAgain.readLine()) != null) {
+        if("na".equals(priceLine)){
+            System.out.println("Error: Resale price is not available for the selected month. Please check ResalePricesSingapore.csv file.");
+            System.exit(0);
+        }
+        if (lookup.contains(index)) {
+            filtered.add(new String[]{priceLine, areaAgainLine});
+        }
+        index++;
+    }
+    priceReader.close();
+    areaReaderAgain.close();
+
+    return filtered;
+}
+
+// Shared scan performs all filtering in a single loop
+private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
+    BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
+    BufferedReader townReader = new BufferedReader(new FileReader(DATA_DIR + "/town.csv"));
+    BufferedReader areaReader = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
+    BufferedReader priceReader = new BufferedReader(new FileReader(DATA_DIR + "/resale_price.csv"));
+
+    List<String[]> filtered = new ArrayList<>();
+    String monthLine, townLine, areaLine, priceLine;
+    int index = 0;
+    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1;
+
+    while ((monthLine = monthReader.readLine()) != null &&
+           (townLine = townReader.readLine()) != null &&
+           (areaLine = areaReader.readLine()) != null &&
+           (priceLine = priceReader.readLine()) != null) {
+
+        if (index >= zone_startIdx && index < adjustedEnd) {
+            int monthValue = Integer.parseInt(monthLine.substring(5, 7));
+            int yearValue = Integer.parseInt(monthLine.substring(0, 4));
+
+            if ((yearValue == year) && (monthValue == startMonth || monthValue == (startMonth + 1)) &&
+                townLine.equalsIgnoreCase(town) && Double.parseDouble(areaLine) >= 80) {
+                filtered.add(new String[]{priceLine, areaLine});
+            }
+        }
+        index++;
+    }
+
+    monthReader.close();
+    townReader.close();
+    areaReader.close();
+    priceReader.close();
+
+    return filtered;
+}
+
+    // // As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area
+    // private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
+    //     List<String> months = Files.readAllLines(Paths.get(DATA_DIR, "month.csv"));
+    //     List<Integer> pos = new ArrayList<>();
     
-    // As per lecture, the shared scan performs a single-stage filter on the data based on the year, month, town, and area
-    private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
-        List<String> months = Files.readAllLines(Paths.get(DATA_DIR, "month.csv"));
-        List<String> towns = Files.readAllLines(Paths.get(DATA_DIR, "town.csv"));
-        List<String> areas = Files.readAllLines(Paths.get(DATA_DIR, "floor_area_sqm.csv"));
-        List<String> prices = Files.readAllLines(Paths.get(DATA_DIR, "resale_price.csv"));
+    //     if (zone_endIdx == Integer.MAX_VALUE) { // If zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
+    //         zone_endIdx = months.size();
+    //     } else {
+    //         zone_endIdx += 1;
+    //     }
+    
+    //     // Stage 1: Time filter
+    //     for (int i = zone_startIdx; i < zone_endIdx; i++) {
+    //         int monthValue = Integer.parseInt(months.get(i).substring(5, 7));
+    //         int yearValue = Integer.parseInt(months.get(i).substring(0, 4));
+    //         if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
+    //             pos.add(i);
+    //         }
+    //     }
+    
+    //     // Stage 2: Town filter
+    //     List<String> towns = Files.readAllLines(Paths.get(DATA_DIR, "town.csv"));
+    //     pos.removeIf(idx -> !towns.get(idx).equalsIgnoreCase(town));
+    
+    //     // Stage 3: Area filter
+    //     List<String> areas = Files.readAllLines(Paths.get(DATA_DIR, "floor_area_sqm.csv"));
+    //     pos.removeIf(idx -> Double.parseDouble(areas.get(idx)) < 80);
+    
+    //     // Final: Get filtered data
+    //     List<String> prices = Files.readAllLines(Paths.get(DATA_DIR, "resale_price.csv"));
+    //     List<String[]> filtered = new ArrayList<>();
+    //     for (int i : pos) {
+    //         filtered.add(new String[]{prices.get(i), areas.get(i)});
+    //     }
+    
+    //     return filtered;
+    // }
+    
+    // // As per lecture, the shared scan performs a single-stage filter on the data based on the year, month, town, and area
+    // private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
+    //     List<String> months = Files.readAllLines(Paths.get(DATA_DIR, "month.csv"));
+    //     List<String> towns = Files.readAllLines(Paths.get(DATA_DIR, "town.csv"));
+    //     List<String> areas = Files.readAllLines(Paths.get(DATA_DIR, "floor_area_sqm.csv"));
+    //     List<String> prices = Files.readAllLines(Paths.get(DATA_DIR, "resale_price.csv"));
         
-        List<String[]> filtered = new ArrayList<>();
+    //     List<String[]> filtered = new ArrayList<>();
     
-        if(zone_endIdx == Integer.MAX_VALUE){ // If zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
-            zone_endIdx = months.size();
-        }
-        else{
-            zone_endIdx = zone_endIdx + 1;
-        }
-        for (int i = zone_startIdx; i < zone_endIdx; i++) {
-            int monthValue = Integer.parseInt(months.get(i).substring(5, 7));
-            int yearValue = Integer.parseInt(months.get(i).substring(0, 4));
-            if ((yearValue == year) && (monthValue == startMonth || monthValue == (startMonth + 1)) && towns.get(i).equalsIgnoreCase(town) && Double.parseDouble(areas.get(i)) >= 80) {
-                filtered.add(new String[]{prices.get(i), areas.get(i)});
-            }
-        }
-        return filtered;
-    }
+    //     if(zone_endIdx == Integer.MAX_VALUE){ // If zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
+    //         zone_endIdx = months.size();
+    //     }
+    //     else{
+    //         zone_endIdx = zone_endIdx + 1;
+    //     }
+    //     for (int i = zone_startIdx; i < zone_endIdx; i++) {
+    //         int monthValue = Integer.parseInt(months.get(i).substring(5, 7));
+    //         int yearValue = Integer.parseInt(months.get(i).substring(0, 4));
+    //         if ((yearValue == year) && (monthValue == startMonth || monthValue == (startMonth + 1)) && towns.get(i).equalsIgnoreCase(town) && Double.parseDouble(areas.get(i)) >= 80) {
+    //             filtered.add(new String[]{prices.get(i), areas.get(i)});
+    //         }
+    //     }
+    //     return filtered;
+    // }
     
     // Compute statistics on the filtered data
     public static Map<String, Double> computeStatistics(List<String[]> filteredData) {
@@ -240,19 +411,23 @@ class HDBResaleColumnStore {
     // Compute standard deviation
     private static double computeStandardDeviation(List<Double> values, double mean) {
         if (values.size() <= 1) return 0.0;
-        double variance = values.stream().mapToDouble(v -> Math.pow(v - mean, 2)).sum() / values.size();
+        double variance = values.stream().mapToDouble(v -> Math.pow(v - mean, 2)).sum() / (values.size()-1);
         return Math.sqrt(variance);
     }
     
         
     private static void writeStatisticsToCSV(Map<String, Double> stats, int year, int startMonth, String town, String outputFile) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile))) {
-            writer.write("Year,Month,Town,Category,Value\n");
+            writer.write("Year,Month,Town,Category,Value\n\n");
+            System.out.println("\nResults for " + "Year: " + year + ", " + "Month: " + startMonth + ", " + "Town: "+ town);
+            System.out.println("=================================================");
             for (var entry : stats.entrySet()) {
             writer.write(year + "," + startMonth + "," + town + "," + entry.getKey() + "," + String.format("%.2f", entry.getValue()) + "\n");
+            System.out.println(entry.getKey() + " = " + String.format("%.2f", entry.getValue()));
+               
             }
         }
-        System.out.println("Results saved to " + outputFile);
+        // System.out.println("Results saved to " + outputFile);
         }
 
     // Extract matriculation number to get year, month, and town
@@ -288,7 +463,6 @@ class HDBResaleColumnStore {
 
     //// Main, to run the queries
     public static void main(String[] args) throws IOException {
-        long startTime, endTime;
 
         String csvPath = "ResalePricesSingapore.csv";
 
@@ -302,7 +476,6 @@ class HDBResaleColumnStore {
             // Prompt user for matriculation number
             System.out.println("Enter Matriculation No.");
             String matricNo = userInput.nextLine();  
-            System.out.println("Matriculation No: " + matricNo); 
 
             // Extract year, month, and town from matriculation number
             QueryParams params = matricExtraction(matricNo);
@@ -314,32 +487,20 @@ class HDBResaleColumnStore {
             //// Uncomment the following to run and compare queries performance. Output result will be saved to `output` folder////
         
             // Normal Query
-            System.out.println("Running Normal Query...");
-            startTime = System.currentTimeMillis();
+            System.out.println("\nRunning Normal Query...");
             normalQuery(year, startMonth, town);
-            endTime = System.currentTimeMillis();
-            System.out.println("Normal Query Time: " + (endTime - startTime) + " ms");
 
-            // // Zone Mapping Query
-            // System.out.println("Running Zone Mapping Query...");
-            // startTime = System.currentTimeMillis();
-            // zmQuery(year, startMonth, town, zones);
-            // endTime = System.currentTimeMillis();
-            // System.out.println("Zone Mapping Query Time: " + (endTime - startTime) + " ms");
+            // Zone Mapping Query
+            System.out.println("\nRunning Zone Mapping Query...");
+            zmQuery(year, startMonth, town, zones);
 
-            // // Shared Scan Query
-            // System.out.println("Running Shared Scan Query...");
-            // startTime = System.currentTimeMillis();
-            // ssQuery(year, startMonth, town);
-            // endTime = System.currentTimeMillis();
-            // System.out.println("Shared Scan Query Time: " + (endTime - startTime) + " ms");
+            // Shared Scan Query
+            System.out.println("\nRunning Shared Scan Query...");
+            ssQuery(year, startMonth, town);
             
-            // // Zone Mapping + Shared Scan Query
-            // System.out.println("Running Zone Mapping + Shared Scan Query...");
-            // startTime = System.currentTimeMillis();
-            // zmssQuery(year, startMonth, town, zones);
-            // endTime = System.currentTimeMillis();
-            // System.out.println("Zone Mapping + Shared Scan Query Time: " + (endTime - startTime) + " ms");
+            // Zone Mapping + Shared Scan Query
+            System.out.println("\nRunning Zone Mapping + Shared Scan Query...");
+            zmssQuery(year, startMonth, town, zones);
 
         } catch (Exception e) {
             System.out.println("Error: " + e.getMessage());
