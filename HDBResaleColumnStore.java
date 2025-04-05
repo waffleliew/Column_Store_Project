@@ -224,15 +224,16 @@ class HDBResaleColumnStore {
 
 
 // Query helper functions for recyclability 
-// Multi-stage filtering with column store semantics: Stage 1 (A), then B
+
+// As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area, using positional lists to track the indices of the filtered data
 private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
     List<Integer> pos = new ArrayList<>(); // position list for month filter
-
+    
     // Stage 1: Time filter using BufferedReader
     BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
     String monthLine;
     int index = 0;
-    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1;
+    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1; // if zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
 
     while ((monthLine = monthReader.readLine()) != null) {
         if(monthLine.equals("na")){ // null or wrong data type check
@@ -314,7 +315,7 @@ private static List<String[]> normalScan(int year, int startMonth, String town, 
     return filtered;
 }
 
-// Shared scan performs all filtering in a single loop
+// As per lecture, the shared scan performs a one-pass filter on the data based on the year, month, town, and area 
 private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
     BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
     BufferedReader townReader = new BufferedReader(new FileReader(DATA_DIR + "/town.csv"));
@@ -324,7 +325,7 @@ private static List<String[]> sharedScan(int year, int startMonth, String town, 
     List<String[]> filtered = new ArrayList<>();
     String monthLine, townLine, areaLine, priceLine;
     int index = 0;
-    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1;
+    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1; // if zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
 
     while ((monthLine = monthReader.readLine()) != null &&
            (townLine = townReader.readLine()) != null &&
