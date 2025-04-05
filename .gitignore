@@ -1,6 +1,6 @@
 HDBResaleColumnStore.class
 ZoneMapping.class
-output/*
-output/.gitkeep
-column_store/*
-column_store/.gitkeep
+
+
+output
+column_store
