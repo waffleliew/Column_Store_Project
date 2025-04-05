@@ -224,46 +224,49 @@ class HDBResaleColumnStore {
 
 
 // Query helper functions for recyclability 
-
-// As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area, using positional lists to track the indices of the filtered data
+// As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area. 
 private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
-    List<Integer> pos = new ArrayList<>(); // position list for month filter
-    
+    List<Integer> pos = new ArrayList<>();
+
     // Stage 1: Time filter using BufferedReader
     BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
     String monthLine;
     int index = 0;
-    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1; // if zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
+    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1;
+
+    int stage1Start = -1, stage1End = -1; // Used to narrow down the read range at each stage using updated start and end indices. -1 indicates no valid range found yet
+
 
     while ((monthLine = monthReader.readLine()) != null) {
-        if(monthLine.equals("na")){ // null or wrong data type check
-            System.out.println("Error: Month Column contains anomalies for the selected year and month. Please check initial warning and ResalePricesSingapore.csv file.");
-            System.exit(0);
-        }
         if (index >= zone_startIdx && index < adjustedEnd) {
+            if(monthLine.equals("na")){
+                System.out.println("Error: Month Column contains anomalies...");
+                System.exit(0);
+            }
             int monthValue = Integer.parseInt(monthLine.substring(5, 7));
             int yearValue = Integer.parseInt(monthLine.substring(0, 4));
             if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
-                pos.add(index);
+                pos.add(index); // add index to the list of positions that meet the query condition for month
+                // narrow down the read range for the next stage
+                if (stage1Start == -1) stage1Start = index; // set start index only once
+                stage1End = index;  // always update until last index that meets the query condition for month
             }
         }
         index++;
     }
     monthReader.close();
 
-
     // Stage 2: Town filter
     BufferedReader townReader = new BufferedReader(new FileReader(DATA_DIR + "/town.csv"));
-    List<Integer> townFiltered = new ArrayList<>(); // position list for town filter
+    List<Integer> townFiltered = new ArrayList<>();
     index = 0;
     String townLine;
     while ((townLine = townReader.readLine()) != null) {
-        if (pos.contains(index)) {
+        if (index >= stage1Start && index <= stage1End && pos.contains(index)) {
             if (townLine.equalsIgnoreCase(town)) {
                 townFiltered.add(index);
-            }
-            else if (townLine.equalsIgnoreCase("na")) { // null or wrong data type check
-                System.out.println("Error: Town Column contains anomalies for the selected year and month. Please check initial warning and ResalePricesSingapore.csv file.");
+            } else if (townLine.equalsIgnoreCase("na")) {
+                System.out.println("Error: Town Column contains anomalies...");
                 System.exit(0);
             }
         }
@@ -273,23 +276,26 @@ private static List<String[]> normalScan(int year, int startMonth, String town, 
 
     // Stage 3: Area filter
     BufferedReader areaReader = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
-    List<Integer> finalFiltered = new ArrayList<>(); //position list for final filter
+    List<Integer> finalFiltered = new ArrayList<>();
     index = 0;
     String areaLine;
+    // Use the filtered indices from the previous stage to narrow down the read range
+    int stage2Start = townFiltered.isEmpty() ? -1 : townFiltered.get(0); 
+    int stage2End = townFiltered.isEmpty() ? -1 : townFiltered.get(townFiltered.size() - 1);
+
     while ((areaLine = areaReader.readLine()) != null) {
-        if (townFiltered.contains(index)) {
+        if (index >= stage2Start && index <= stage2End && townFiltered.contains(index)) {
+            if (areaLine.equals("na")) {
+                System.out.println("Error: Floor Area Column contains anomalies...");
+                System.exit(0);
+            }
             if (Double.parseDouble(areaLine) >= 80) {
                 finalFiltered.add(index);
             }
-            else if (areaLine.equals("na")) { // null or wrong data type check
-                System.out.println("Error: Floor Area Column contains anomalies for the selected year and month. Please check initial warning and ResalePricesSingapore.csv file.");
-                System.exit(0);
-            }       
         }
         index++;
     }
     areaReader.close();
-
 
     // Final: Fetch prices and areas for filtered positions
     BufferedReader priceReader = new BufferedReader(new FileReader(DATA_DIR + "/resale_price.csv"));
@@ -297,15 +303,15 @@ private static List<String[]> normalScan(int year, int startMonth, String town, 
     List<String[]> filtered = new ArrayList<>();
     index = 0;
     String priceLine, areaAgainLine;
-    Set<Integer> lookup = new HashSet<>(finalFiltered); //position hashset for O(1) lookup, since order of filtered data is not important anymore
+    Set<Integer> lookup = new HashSet<>(finalFiltered);
 
     while ((priceLine = priceReader.readLine()) != null && (areaAgainLine = areaReader2.readLine()) != null) {
         if (lookup.contains(index)) {
-            filtered.add(new String[]{priceLine, areaAgainLine});
-            if (priceLine.equals("na") || areaAgainLine.equals("na")) { // null or wrong data type check
-                System.out.println("Error: Resale price or floor area column contains anomalies for the selected area (>=80sqm), town, year and month. Please check initial warning and ResalePricesSingapore.csv file.");
+            if (priceLine.equals("na") || areaAgainLine.equals("na")) {
+                System.out.println("Error: Resale price or floor area column contains anomalies...");
                 System.exit(0);
             }
+            filtered.add(new String[]{priceLine, areaAgainLine});
         }
         index++;
     }
@@ -314,6 +320,8 @@ private static List<String[]> normalScan(int year, int startMonth, String town, 
 
     return filtered;
 }
+
+
 
 // As per lecture, the shared scan performs a one-pass filter on the data based on the year, month, town, and area 
 private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
@@ -357,68 +365,6 @@ private static List<String[]> sharedScan(int year, int startMonth, String town, 
     return filtered;
 }
 
-    // // As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area
-    // private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
-    //     List<String> months = Files.readAllLines(Paths.get(DATA_DIR, "month.csv"));
-    //     List<Integer> pos = new ArrayList<>();
-    
-    //     if (zone_endIdx == Integer.MAX_VALUE) { // If zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
-    //         zone_endIdx = months.size();
-    //     } else {
-    //         zone_endIdx += 1;
-    //     }
-    
-    //     // Stage 1: Time filter
-    //     for (int i = zone_startIdx; i < zone_endIdx; i++) {
-    //         int monthValue = Integer.parseInt(months.get(i).substring(5, 7));
-    //         int yearValue = Integer.parseInt(months.get(i).substring(0, 4));
-    //         if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
-    //             pos.add(i);
-    //         }
-    //     }
-    
-    //     // Stage 2: Town filter
-    //     List<String> towns = Files.readAllLines(Paths.get(DATA_DIR, "town.csv"));
-    //     pos.removeIf(idx -> !towns.get(idx).equalsIgnoreCase(town));
-    
-    //     // Stage 3: Area filter
-    //     List<String> areas = Files.readAllLines(Paths.get(DATA_DIR, "floor_area_sqm.csv"));
-    //     pos.removeIf(idx -> Double.parseDouble(areas.get(idx)) < 80);
-    
-    //     // Final: Get filtered data
-    //     List<String> prices = Files.readAllLines(Paths.get(DATA_DIR, "resale_price.csv"));
-    //     List<String[]> filtered = new ArrayList<>();
-    //     for (int i : pos) {
-    //         filtered.add(new String[]{prices.get(i), areas.get(i)});
-    //     }
-    
-    //     return filtered;
-    // }
-    
-    // // As per lecture, the shared scan performs a single-stage filter on the data based on the year, month, town, and area
-    // private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
-    //     List<String> months = Files.readAllLines(Paths.get(DATA_DIR, "month.csv"));
-    //     List<String> towns = Files.readAllLines(Paths.get(DATA_DIR, "town.csv"));
-    //     List<String> areas = Files.readAllLines(Paths.get(DATA_DIR, "floor_area_sqm.csv"));
-    //     List<String> prices = Files.readAllLines(Paths.get(DATA_DIR, "resale_price.csv"));
-        
-    //     List<String[]> filtered = new ArrayList<>();
-    
-    //     if(zone_endIdx == Integer.MAX_VALUE){ // If zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
-    //         zone_endIdx = months.size();
-    //     }
-    //     else{
-    //         zone_endIdx = zone_endIdx + 1;
-    //     }
-    //     for (int i = zone_startIdx; i < zone_endIdx; i++) {
-    //         int monthValue = Integer.parseInt(months.get(i).substring(5, 7));
-    //         int yearValue = Integer.parseInt(months.get(i).substring(0, 4));
-    //         if ((yearValue == year) && (monthValue == startMonth || monthValue == (startMonth + 1)) && towns.get(i).equalsIgnoreCase(town) && Double.parseDouble(areas.get(i)) >= 80) {
-    //             filtered.add(new String[]{prices.get(i), areas.get(i)});
-    //         }
-    //     }
-    //     return filtered;
-    // }
     
     // Compute statistics on the filtered data
     public static Map<String, Double> computeStatistics(List<String[]> filteredData) {
@@ -529,12 +475,12 @@ private static List<String[]> sharedScan(int year, int startMonth, String town, 
             //// Uncomment the following to run and compare queries performance. Output result will be saved to `output` folder////
         
             // Normal Query
-            // System.out.println("\nRunning Normal Query...");
-            // normalQuery(year, startMonth, town);
+            System.out.println("\nRunning Normal Query...");
+            normalQuery(year, startMonth, town);
 
-            // // Zone Mapping Query
-            // System.out.println("\nRunning Zone Mapping Query...");
-            // zmQuery(year, startMonth, town, zones);
+            // Zone Mapping Query
+            System.out.println("\nRunning Zone Mapping Query...");
+            zmQuery(year, startMonth, town, zones);
 
             // Shared Scan Query
             System.out.println("\nRunning Shared Scan Query...");
