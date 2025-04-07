@@ -1,4 +1,5 @@
 import java.io.*;
+import java.nio.channels.Channels;
 import java.nio.file.*;
 import java.time.YearMonth;
 import java.util.*;
@@ -7,6 +8,8 @@ import java.util.stream.Collectors;
 class HDBResaleColumnStore {
     private static final String DATA_DIR = "column_store";
     private static final String OUTPUTCSV = "output/SortedResalePrices.csv";
+    private static final Map<String, List<Long>> FILEINDICES = new HashMap<>();
+
     private static void ensureDirectoriesExist() {
         String[] directories = {"output", "column_store"};
         for (String dir : directories) {
@@ -61,6 +64,47 @@ class HDBResaleColumnStore {
         System.out.println("Sorted CSV written to " + outputCsvPath);
     }
 
+    public static void MultiFileCSVAccess() throws IOException {
+        
+        buildIndexTable("column_store/month.csv");
+        buildIndexTable("column_store/town.csv");
+        buildIndexTable("column_store/floor_area_sqm.csv");
+        buildIndexTable("column_store/resale_price.csv");
+    }
+
+    // Build index look up table
+    public static void buildIndexTable(String filePath) throws IOException {
+    List<Long> offsets = new ArrayList<>();
+    try (RandomAccessFile raf = new RandomAccessFile(filePath, "r")) {
+        long offset;
+        while ((offset = raf.getFilePointer()) < raf.length()) {//
+            offsets.add(offset); // Store the current file pointer position
+            raf.readLine(); 
+        }
+    }
+    FILEINDICES.put(filePath, offsets);
+}
+
+
+    //Get data directly from the CSV file using look up table
+    /*public static String getLine(String filePath, int lineNumber) throws IOException {
+        if(!FILEINDICES.containsKey(filePath)) {
+            throw new IllegalArgumentException("File does not have an index look up table: " + filePath);
+        }
+
+        List<Long> offsets = FILEINDICES.get(filePath);
+        if(lineNumber < 0 || lineNumber >= offsets.size()) {
+            // throw new IndexOutOfBoundsException("Invalid line number for file : " + filePath);
+            return null;
+        }
+
+        try(RandomAccessFile raf = new RandomAccessFile(filePath, "r")) {
+            raf.seek(offsets.get(lineNumber));
+            
+            return raf.readLine();
+        }
+    }*/  
+
     // Split the CSV file into separate files for each column in column_store directory
     public static void splitCSV(String csvPath) throws IOException {
         Files.createDirectories(Paths.get(DATA_DIR));
@@ -73,7 +117,6 @@ class HDBResaleColumnStore {
         for (String col : columns) {
             writers.put(col, new BufferedWriter(new FileWriter(DATA_DIR + "/" + col + ".csv")));
         }
-
         int lineNumber = 1;
         String line;
         while ((line = reader.readLine()) != null) {
@@ -226,98 +269,150 @@ class HDBResaleColumnStore {
 // Query helper functions for recyclability 
 // As per lecture, the normal scan performs multi-stage filter on the data based on the year, month, town, and area. 
 private static List<String[]> normalScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
-    List<Integer> pos = new ArrayList<>();
+    // List<Integer> pos = new ArrayList<>();
+    // String monthFilePath = "column_store/month.csv";
+    // // Stage 1: Time filter using BufferedReader
 
-    // Stage 1: Time filter using BufferedReader
+    // int index = 1;
+    // if(zone_startIdx != 0){
+    //     index = zone_startIdx;
+    // }
+
+    // if(!FILEINDICES.containsKey(monthFilePath)) {
+    //     throw new IllegalArgumentException("File does not have an index look up table: " + monthFilePath);
+    // }
+    // RandomAccessFile raf_month = new RandomAccessFile(monthFilePath, "r");
+    // int monthSize = FILEINDICES.get(monthFilePath).size(); // Get the size of the month column
+    // raf_month.seek(FILEINDICES.get(monthFilePath).get(index)); // Seek to the index of the month column 
+    // while(index < monthSize){ // Loop until the end of the month column from break condition
+    //     // String monthLine = getLine("column_store/month.csv",index+1);
+    //     // if(index == monthSize) break; //end of reading month column //11
+
+    //     String monthLine = raf_month.readLine(); // Read the line at the current file pointer
+
+    //     if(monthLine.equals("na")){
+    //         System.out.println("Error: Month Column contains anomalies...");
+    //         System.exit(0);
+    //     }
+    //     // System.err.println("index: " + index + "month size: " + monthSize + "monthline: " + monthLine);
+    //     int monthValue = Integer.parseInt(monthLine.substring(5, 7));
+    //     // System.err.println("index2: " + index + "month size2: " + monthSize + "monthline2: " + monthLine);
+    //     int yearValue = Integer.parseInt(monthLine.substring(0, 4));
+    //     if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
+    //         pos.add(index); // add index to the list of positions that meet the query condition for month
+    //         // narrow down the read range for the next stage
+    //     }
+    
+    // index++;
+
+    // }
     BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
+
+    List<Integer> pos = new ArrayList<>();
     String monthLine;
-    int index = 0;
-    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1;
+    // Stage 1: Time filter using BufferedReader
 
-    int stage1Start = -1, stage1End = -1; // Used to narrow down the read range at each stage using updated start and end indices. -1 indicates no valid range found yet
-
-
-    while ((monthLine = monthReader.readLine()) != null) {
-        if (index >= zone_startIdx && index < adjustedEnd) {
-            if(monthLine.equals("na")){
-                System.out.println("Error: Month Column contains anomalies...");
-                System.exit(0);
-            }
-            int monthValue = Integer.parseInt(monthLine.substring(5, 7));
-            int yearValue = Integer.parseInt(monthLine.substring(0, 4));
-            if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
-                pos.add(index); // add index to the list of positions that meet the query condition for month
-                // narrow down the read range for the next stage
-                if (stage1Start == -1) stage1Start = index; // set start index only once
-                stage1End = index;  // always update until last index that meets the query condition for month
-            }
-        }
-        index++;
+    int index = 1;
+    if(zone_startIdx != 0){
+        index = zone_startIdx;
     }
-    monthReader.close();
+    // use buffered reader to read the month column since reading all line
+    while ((monthLine = monthReader.readLine()) != null ){
+
+        if (index-1 >= zone_startIdx && index-1 < zone_endIdx) {
+            // String monthLine = getLine("column_store/month.csv",index+1);
+            // if(index == monthSize) break; //end of reading month column //11
+        if(monthLine.equals("na")){
+            System.out.println("Error: Month Column contains anomalies...");
+            System.exit(0);
+        }
+        // System.err.println("index: " + index + "month size: " + monthSize + "monthline: " + monthLine);
+        int monthValue = Integer.parseInt(monthLine.substring(5, 7));
+        // System.err.println("index2: " + index + "month size2: " + monthSize + "monthline2: " + monthLine);
+        int yearValue = Integer.parseInt(monthLine.substring(0, 4));
+        if (yearValue == year && (monthValue == startMonth || monthValue == (startMonth + 1))) {
+            pos.add(index); // add index to the list of positions that meet the query condition for month
+            // narrow down the read range for the next stage
+        }}
+    
+    index++;
+
+    }
 
     // Stage 2: Town filter
-    BufferedReader townReader = new BufferedReader(new FileReader(DATA_DIR + "/town.csv"));
-    List<Integer> townFiltered = new ArrayList<>();
-    index = 0;
+    List<Integer> townPos = new ArrayList<>();
+    String townFilePath = "column_store/town.csv";
+    if(!FILEINDICES.containsKey(townFilePath)) {
+        throw new IllegalArgumentException("File does not have an index look up table: " + townFilePath);
+    }
+    RandomAccessFile raf_town = new RandomAccessFile(townFilePath, "r");
     String townLine;
-    while ((townLine = townReader.readLine()) != null) {
-        if (index >= stage1Start && index <= stage1End && pos.contains(index)) {
-            if (townLine.equalsIgnoreCase(town)) {
-                townFiltered.add(index);
-            } else if (townLine.equalsIgnoreCase("na")) {
-                System.out.println("Error: Town Column contains anomalies...");
-                System.exit(0);
-            }
+    for(int town_index: pos){
+        // townLine = getLine("column_store/town.csv",town_index+1);
+        raf_town.seek(FILEINDICES.get(townFilePath).get(town_index)); // Seek to the index of the month column
+        townLine = raf_town.readLine(); // Read the line at the current file pointer
+        if (townLine.equalsIgnoreCase("na")) {
+            System.out.println("Error: Town Column contains anomalies...");
+            System.exit(0);
         }
-        index++;
+        if (townLine.equalsIgnoreCase(town)) {
+            townPos.add(town_index);
+        } 
+        
     }
-    townReader.close();
-
     // Stage 3: Area filter
-    BufferedReader areaReader = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
-    List<Integer> finalFiltered = new ArrayList<>();
-    index = 0;
-    String areaLine;
-    // Use the filtered indices from the previous stage to narrow down the read range
-    int stage2Start = townFiltered.isEmpty() ? -1 : townFiltered.get(0); 
-    int stage2End = townFiltered.isEmpty() ? -1 : townFiltered.get(townFiltered.size() - 1);
-
-    while ((areaLine = areaReader.readLine()) != null) {
-        if (index >= stage2Start && index <= stage2End && townFiltered.contains(index)) {
-            if (areaLine.equals("na")) {
-                System.out.println("Error: Floor Area Column contains anomalies...");
-                System.exit(0);
-            }
-            if (Double.parseDouble(areaLine) >= 80) {
-                finalFiltered.add(index);
-            }
-        }
-        index++;
+    List<Integer> areaPos = new ArrayList<>();
+    String areaFilePath = "column_store/floor_area_sqm.csv";
+    if(!FILEINDICES.containsKey(areaFilePath)) {
+        throw new IllegalArgumentException("File does not have an index look up table: " + areaFilePath);
     }
-    areaReader.close();
+    RandomAccessFile raf_area = new RandomAccessFile(areaFilePath, "r");
+
+    String areaLine;
+    for(int area_index : townPos){
+        // areaLine = getLine("column_store/floor_area_sqm.csv",area_index+1);
+        raf_area.seek(FILEINDICES.get(areaFilePath).get(area_index)); // Seek to the index of the month column
+        areaLine = raf_area.readLine(); // Read the line at the current file pointer
+        if (areaLine.equals("na")) {
+            System.out.println("Error: Floor Area Column contains anomalies...");
+            System.exit(0);
+        }
+        if (Double.parseDouble(areaLine) >= 80) {
+            areaPos.add(area_index);
+        }
+        
+    }
 
     // Final: Fetch prices and areas for filtered positions
-    BufferedReader priceReader = new BufferedReader(new FileReader(DATA_DIR + "/resale_price.csv"));
-    BufferedReader areaReader2 = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
     List<String[]> filtered = new ArrayList<>();
-    index = 0;
+    String priceFilePath = "column_store/resale_price.csv";
     String priceLine, areaAgainLine;
-    Set<Integer> lookup = new HashSet<>(finalFiltered);
+    Set<Integer> lookup = new HashSet<>(areaPos);
+    if(!FILEINDICES.containsKey(priceFilePath)) {
+        throw new IllegalArgumentException("File does not have an index look up table: " + priceFilePath);
+    }
+    RandomAccessFile raf_price = new RandomAccessFile(priceFilePath, "r");
+    for(int finalIndex : areaPos){
+        // priceLine = getLine("column_store/resale_price.csv",finalIndex+1);
+        // areaAgainLine = getLine("column_store/floor_area_sqm.csv",finalIndex+1);
+        raf_price.seek(FILEINDICES.get(priceFilePath).get(finalIndex)); // Seek to the index of the month column
+        priceLine = raf_price.readLine(); // Read the line at the current file pointer
+        raf_area.seek(FILEINDICES.get(areaFilePath).get(finalIndex)); // Seek to the index of the month column
+        areaAgainLine = raf_area.readLine(); // Read the line at the current file pointer
 
-    while ((priceLine = priceReader.readLine()) != null && (areaAgainLine = areaReader2.readLine()) != null) {
-        if (lookup.contains(index)) {
+        if (priceLine.equals("na")) {
+            System.out.println("Error: Resale price column contains anomalies...");
+            System.exit(0);
+        }
+        if (lookup.contains(finalIndex)) {
             if (priceLine.equals("na") || areaAgainLine.equals("na")) {
                 System.out.println("Error: Resale price or floor area column contains anomalies...");
                 System.exit(0);
             }
             filtered.add(new String[]{priceLine, areaAgainLine});
         }
-        index++;
+ 
     }
-    priceReader.close();
-    areaReader2.close();
-
     return filtered;
 }
 
@@ -325,44 +420,99 @@ private static List<String[]> normalScan(int year, int startMonth, String town, 
 
 // As per lecture, the shared scan performs a one-pass filter on the data based on the year, month, town, and area 
 private static List<String[]> sharedScan(int year, int startMonth, String town, int zone_startIdx, int zone_endIdx) throws IOException {
+
+    List<String[]> filtered = new ArrayList<>();
+    int index = 0;
+    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1; // if zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
+
+    if(adjustedEnd == Integer.MAX_VALUE){ //for normal scan, read the entire file using buffered reader for better efficiency
+    String monthLine, townLine, areaLine, priceLine;
     BufferedReader monthReader = new BufferedReader(new FileReader(DATA_DIR + "/month.csv"));
     BufferedReader townReader = new BufferedReader(new FileReader(DATA_DIR + "/town.csv"));
     BufferedReader areaReader = new BufferedReader(new FileReader(DATA_DIR + "/floor_area_sqm.csv"));
     BufferedReader priceReader = new BufferedReader(new FileReader(DATA_DIR + "/resale_price.csv"));
+  
+        while((monthLine = monthReader.readLine()) != null &&
+            (townLine = townReader.readLine()) != null &&
+            (areaLine = areaReader.readLine()) != null &&
+            (priceLine = priceReader.readLine()) != null) {
 
-    List<String[]> filtered = new ArrayList<>();
-    String monthLine, townLine, areaLine, priceLine;
-    int index = 0;
-    int adjustedEnd = zone_endIdx == Integer.MAX_VALUE ? Integer.MAX_VALUE : zone_endIdx + 1; // if zone_endIdx is not set (for non-zone index queries), set it to the size of the months list to perform a full column scan
+            if (index >= zone_startIdx && index < adjustedEnd) {
+                int monthValue = Integer.parseInt(monthLine.substring(5, 7));
+                int yearValue = Integer.parseInt(monthLine.substring(0, 4));
+                if (monthLine.equals("na") || townLine.equals("na") || areaLine.equals("na") || priceLine.equals("na")) { // null or wrong data type check
+                    System.out.println("Error: Month, Town, Floor Area or Resale Price Column contains anomalies for the selected year and month. Please check initial warning and ResalePricesSingapore.csv file.");
+                    System.exit(0);
+                }
+                if ((yearValue == year) && (monthValue == startMonth || monthValue == (startMonth + 1)) &&
+                    townLine.equalsIgnoreCase(town) && Double.parseDouble(areaLine) >= 80) {
+                    filtered.add(new String[]{priceLine, areaLine});
 
-    while ((monthLine = monthReader.readLine()) != null &&
-           (townLine = townReader.readLine()) != null &&
-           (areaLine = areaReader.readLine()) != null &&
-           (priceLine = priceReader.readLine()) != null) {
-
-        if (index >= zone_startIdx && index < adjustedEnd) {
-            int monthValue = Integer.parseInt(monthLine.substring(5, 7));
-            int yearValue = Integer.parseInt(monthLine.substring(0, 4));
-            if (monthLine.equals("na") || townLine.equals("na") || areaLine.equals("na") || priceLine.equals("na")) { // null or wrong data type check
-                System.out.println("Error: Month, Town, Floor Area or Resale Price Column contains anomalies for the selected year and month. Please check initial warning and ResalePricesSingapore.csv file.");
-                System.exit(0);
+                }
             }
-            if ((yearValue == year) && (monthValue == startMonth || monthValue == (startMonth + 1)) &&
-                townLine.equalsIgnoreCase(town) && Double.parseDouble(areaLine) >= 80) {
-                filtered.add(new String[]{priceLine, areaLine});
-
-            }
+            index++;
         }
-        index++;
     }
+    else{ // zone mapping query: use the index to seek to the start of the file and read from there until zone mapping end index
+ 
+     // File paths
+    String monthFilePath = "column_store/month.csv";
+    String townFilePath = "column_store/town.csv";
+    String areaFilePath = "column_store/floor_area_sqm.csv";
+    String priceFilePath = "column_store/resale_price.csv";
 
+ // Seek once to zone_startIdx, wrap BufferedReader for buffered sequential read 
+    RandomAccessFile raf_month = new RandomAccessFile(monthFilePath, "r");
+    raf_month.seek(FILEINDICES.get(monthFilePath).get(zone_startIdx));
+    BufferedReader monthReader = new BufferedReader(new InputStreamReader(Channels.newInputStream(raf_month.getChannel()))); // use channel to wrap the raf reader for buffered read for faster access 
 
+    RandomAccessFile raf_town = new RandomAccessFile(townFilePath, "r");
+    raf_town.seek(FILEINDICES.get(townFilePath).get(zone_startIdx));
+    BufferedReader townReader = new BufferedReader(new InputStreamReader(Channels.newInputStream(raf_town.getChannel())));
+
+    RandomAccessFile raf_area = new RandomAccessFile(areaFilePath, "r");
+    raf_area.seek(FILEINDICES.get(areaFilePath).get(zone_startIdx));
+    BufferedReader areaReader = new BufferedReader(new InputStreamReader(Channels.newInputStream(raf_area.getChannel())));
+
+    RandomAccessFile raf_price = new RandomAccessFile(priceFilePath, "r");
+    raf_price.seek(FILEINDICES.get(priceFilePath).get(zone_startIdx));
+    BufferedReader priceReader = new BufferedReader(new InputStreamReader(Channels.newInputStream(raf_price.getChannel())));
+
+    // Sequential scan from zone_startIdx up to zone_endIdx
+    int linesToRead = zone_endIdx - zone_startIdx;
+    for (int i = 0; i < linesToRead; i++) {
+        String monthLine = monthReader.readLine();
+        String townLine = townReader.readLine();
+        String areaLine = areaReader.readLine();
+        String priceLine = priceReader.readLine();
+
+        if (monthLine == null || townLine == null || areaLine == null || priceLine == null) break;
+
+        // Basic anomaly check
+        if (monthLine.equals("na") || townLine.equals("na") || areaLine.equals("na") || priceLine.equals("na")) {
+            System.out.println("Error: Column contains anomalies. Please check ResalePricesSingapore.csv.");
+            System.exit(0);
+        }
+
+        int monthValue = Integer.parseInt(monthLine.substring(5, 7));
+        int yearValue = Integer.parseInt(monthLine.substring(0, 4));
+
+        if ((yearValue == year) &&
+            (monthValue == startMonth || monthValue == (startMonth + 1)) &&
+            townLine.equalsIgnoreCase(town) &&
+            Double.parseDouble(areaLine) >= 80) {
+            filtered.add(new String[]{priceLine, areaLine});
+        }
+    }
     monthReader.close();
     townReader.close();
     areaReader.close();
     priceReader.close();
 
+    }
+
     return filtered;
+
 }
 
     
@@ -450,13 +600,15 @@ private static List<String[]> sharedScan(int year, int startMonth, String town, 
 
     //// Main, to run the queries
     public static void main(String[] args) throws IOException {
-        
-        ensureDirectoriesExist();
         String csvPath = "ResalePricesSingapore.csv";
+        ensureDirectoriesExist();
 
         // One-time preprocessing step
         sortCSVByMonth(csvPath, OUTPUTCSV);
         splitCSV(OUTPUTCSV); 
+        MultiFileCSVAccess();
+
+
         // Generate zones for zone mapping
         Map<String, Map<String, Integer>> zones = generateZones();
 
