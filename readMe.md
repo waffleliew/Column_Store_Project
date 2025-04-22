@@ -14,10 +14,10 @@ BigDataProject/
 │   ├── resale_price.csv
 │   └── ... (other attribute columns)
 ├── output/
-│   ├── NormalQuery.csv                 # Output file for Normal Query
-│   ├── SSQuery.csv                     # Output file for Shared Scan Query
-│   ├── ZMQuery.csv                     # Output file for Zone Mapping Query
-│   ├── ZMSSQuery.csv                   # Output file for Zone Mapping + Shared Scan Query
+│   ├── ScanResult_[Matric Number]_Normal.csv             # Output file for Normal Query
+│   ├── ScanResult_[Matric Number]_SS.csv                 # Output file for Shared Scan Query (enhancement)
+│   ├── ScanResult_[Matric Number]_ZM_.csv                # Output file for Zone Mapping Query (enhancement)
+│   ├── ScanResult_[Matric Number]_ZMSS.csv               # Output file for Zone Mapping + Shared Scan Query (enhancement)
 │   ├── SortedResalePrices.csv          # Output file for the sorted resale prices used for the queries 
 
 

@@ -42,7 +42,7 @@ class HDBResaleColumnStore {
             }
         }
         if (monthIndex == -1) {
-            throw new RuntimeException("Month column not found");
+            // throw new RuntimeException("Month column not found");
         }
 
         List<String[]> rows = new ArrayList<>();
@@ -202,7 +202,7 @@ class HDBResaleColumnStore {
 
     //// QUERIES
     // Normal Query - This function performs a normal query on the dataset based on the year, month, town, and area
-    public static void normalQuery(int year, int startMonth, String town) throws IOException {
+    public static void normalQuery(String matricNo, int year, int startMonth, String town) throws IOException {
         long startTime = System.currentTimeMillis(); // start time for performance measurement
 
         List<String[]> filteredData = normalScan(year, startMonth, town, 0, Integer.MAX_VALUE); // 0, Integer.MAX_VALUE to perform a full column scan
@@ -211,13 +211,13 @@ class HDBResaleColumnStore {
         System.out.println("Query Time: " + (endTime - startTime) + " ms");
         Map<String, Double> stats = computeStatistics(filteredData); // compute output statistics on the filtered data
         writeStatisticsToCSV(stats, year, startMonth, town, 
-                "output/NormalQuery_" + year + "_" + startMonth + "_" + town + ".csv");
+            "output/ScanResult_" + matricNo + "_Normal.csv");
     }
 
 
     /// ENHANCEMENTS:
     // Zone Mapping Query - This function performs a zone mapping query on the dataset based on the year, month, town, and area
-    public static void zmQuery(int year, int startMonth, String town, Map<String, Map<String, Integer>> zones)
+    public static void zmQuery(String matricNo, int year, int startMonth, String town, Map<String, Map<String, Integer>> zones)
             throws IOException {
 
         String yearKey = String.valueOf(year);
@@ -230,22 +230,22 @@ class HDBResaleColumnStore {
         System.out.println("Query Time: " + (endTime - startTime) + " ms");
         Map<String, Double> stats = computeStatistics(filteredData);
         writeStatisticsToCSV(stats, year, startMonth, town,
-                "output/ZMQuery_" + year + "_" + startMonth + "_" + town + ".csv");
+            "output/ScanResult_" + matricNo + "_ZM.csv");
     }
 
     // Shared Scan Query - This function performs a shared scan query on the dataset based on the year, month, town, and area
-    public static void ssQuery(int year, int startMonth, String town) throws IOException { 
+    public static void ssQuery(String matricNo, int year, int startMonth, String town) throws IOException { 
         long startTime = System.currentTimeMillis();
         List<String[]> filteredData = sharedScan(year, startMonth, town, 0, Integer.MAX_VALUE); // 0, Integer.MAX_VALUE to perform a full column scan
         long endTime = System.currentTimeMillis();
         System.out.println("Query Time: " + (endTime - startTime) + " ms");
         Map<String, Double> stats = computeStatistics(filteredData);
         writeStatisticsToCSV(stats, year, startMonth, town,
-                "output/SSQuery_" + year + "_" + startMonth + "_" + town + ".csv");
+            "output/ScanResult_" + matricNo + "_SS.csv");
     }
 
     // Zone Mapping + Shared Scan Query - This function performs a zone mapping + shared scan query on the dataset based on the year, month, town, and area
-    public static void zmssQuery(int year, int startMonth, String town, Map<String, Map<String, Integer>> zones)
+    public static void zmssQuery(String matricNo, int year, int startMonth, String town, Map<String, Map<String, Integer>> zones)
             throws IOException {
         String yearKey = String.valueOf(year);
         if (!zones.containsKey(yearKey)) {
@@ -258,7 +258,7 @@ class HDBResaleColumnStore {
         System.out.println("Query Time: " + (endTime - startTime) + " ms");
         Map<String, Double> stats = computeStatistics(filteredData); 
         writeStatisticsToCSV(stats, year, startMonth, town,
-                "output/ZMSSQuery_" + year + "_" + startMonth + "_" + town + ".csv");
+                "output/ScanResult_" + matricNo + "_ZMSS.csv");
     }
 
 
@@ -551,25 +551,33 @@ class HDBResaleColumnStore {
         return Math.sqrt(variance);
     }
 
-    private static void writeStatisticsToCSV(Map<String, Double> stats, int year, int startMonth, String town,
-            String outputFile) throws IOException {
+    private static void writeStatisticsToCSV(Map<String, Double> stats, int year, int startMonth, String town, String outputFile) throws IOException {
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(outputFile))) {
-            writer.write("Year,Month,Town,Category,Value\n\n");
-            System.out.println(
-                    "\nResults for " + "Year: " + year + ", " + "Month: " + startMonth + ", " + "Town: " + town);
-            System.out.println("=================================================");
-            for (var entry : stats.entrySet()) {
-                writer.write(year + "," + startMonth + "," + town + "," + entry.getKey() + ","
-                        + String.format("%.2f", entry.getValue()) + "\n");
-                System.out.println(entry.getKey() + " = " + String.format("%.2f", entry.getValue()));
-
+            writer.write("Year,Month,Town,Category,Value\n");
+    
+            // Check if the statistics indicate "No result"
+            if (stats.values().stream().allMatch(value -> value == -1.0)) { // if -1 is returned for all the statistics, it means at least one of the 4 essential columns is out of range (not qualified), print no result
+                writer.write(year + "," + startMonth + "," + town + ", No result\n");
+                System.out.println("\nResults for Year: " + year + ", Month: " + startMonth + ", Town: " + town);
+                System.out.println("=================================================");
+                System.out.println("No result");
+            } else {
+                System.out.println("\nResults for Year: " + year + ", Month: " + startMonth + ", Town: " + town);
+                System.out.println("=================================================");
+                for (var entry : stats.entrySet()) {
+                    writer.write(year + "," + startMonth + "," + town + "," + entry.getKey() + "," + String.format("%.2f", entry.getValue()) + "\n");
+                    System.out.println(entry.getKey() + " = " + String.format("%.2f", entry.getValue()));
+                }
             }
         }
-        // System.out.println("Results saved to " + outputFile);
     }
 
     // Extract matriculation number to get year, month, and town
+    
     private static QueryParams matricExtraction(String userInput) {
+        if (userInput == null || userInput.length() != 9 || !userInput.matches("[a-zA-Z0-9]+")) {
+            return null; // Return null for invalid input
+        }
         int n = userInput.length();
         int year = userInput.charAt(n - 2) - '0';
         int month = userInput.charAt(n - 3) - '0';
@@ -587,12 +595,13 @@ class HDBResaleColumnStore {
                 0, 2020, 1, 2021, 2, 2022, 3, 2023, 4, 2014, 5, 2015, 6, 2016, 7, 2017, 8, 2018, 9, 2019);
 
         return new QueryParams(
+                userInput.toUpperCase(),
                 yearConverter.getOrDefault(year, 2020),
                 monthConverter.getOrDefault(month, 1),
                 townConverter.getOrDefault(town, "BEDOK"));
     }
 
-    record QueryParams(int year, int month, String town) {
+    record QueryParams(String matricNo, int year, int month, String town) {
     } // simple record to hold query parameters
 
 
@@ -613,33 +622,47 @@ class HDBResaleColumnStore {
 
         try (Scanner userInput = new Scanner(System.in)) {
             // Prompt user for matriculation number
-            System.out.println("Enter Matriculation No.");
-            String matricNo = userInput.nextLine();
+            while (true) {
+                System.out.println("Enter Matriculation No. (type 'exit' to terminate):");
+                String matric = userInput.nextLine();
 
-            // Extract year, month, and town from matriculation number
-            QueryParams params = matricExtraction(matricNo);
-            int year = params.year();
-            int startMonth = params.month();
-            String town = params.town();
+                if ("exit".equalsIgnoreCase(matric)) {
+                    System.out.println("Terminating program...");
+                    break;
+                }
+
+                // Extract year, month, and town from matriculation number
+                QueryParams params = matricExtraction(matric);
+                if (params == null) {
+                    System.out.println("Invalid matriculation number. Please try again.");
+                    continue;
+                }
+
+                String matricNo = params.matricNo();
+                int year = params.year();
+                int startMonth = params.month();
+                String town = params.town();
+
 
             //// Uncomment the following to run and compare queries performance. Output result will be saved to `output` folder////
 
             // Normal Query
             System.out.println("\nRunning Normal Query...");
-            normalQuery(year, startMonth, town);
+            normalQuery(matricNo, year, startMonth, town);
 
             // Zone Mapping Query
             System.out.println("\nRunning Zone Mapping Query...");
-            zmQuery(year, startMonth, town, zones);
+            zmQuery(matricNo, year, startMonth, town, zones);
 
             // Shared Scan Query
             System.out.println("\nRunning Shared Scan Query...");
-            ssQuery(year, startMonth, town);
+            ssQuery(matricNo, year, startMonth, town);
 
             // Zone Mapping + Shared Scan Query
             System.out.println("\nRunning Zone Mapping + Shared Scan Query...");
-            zmssQuery(year, startMonth, town, zones);
-
+            zmssQuery(matricNo, year, startMonth, town, zones);
+            }
+            
         } catch (Exception e) {
             System.out.println("Error: " + e.getMessage());
         }
