@@ -68,6 +68,12 @@ The preprocessing step prepares the data for efficient querying by sorting and s
 - **`generateZones()`**  
   Generates zones (start and end indices) for each year based on the `month.csv` file.  
   - **Output**: A mapping of years to their respective start and end indices.
+  
+- **`MultiFileCSVAccess()`**  
+  Builds an index lookup table for all required columns (e.g., `month.csv`, `town.csv`, `floor_area_sqm.csv`, `resale_price.csv`) to enable efficient random access during queries.  
+  - **Purpose**: Improves query performance by allowing direct access to specific rows in columnar files without sequential scanning.
+  - **Output**: A mapping of file paths to their respective byte offsets for each row.
+
 
 
 
