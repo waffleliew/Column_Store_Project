@@ -2,6 +2,8 @@
 
 This project implements a column store for HDB resale price data in Singapore. It provides preprocessing and querying mechanisms to analyze large datasets. 
 
+# Contributors: [Chermine Cheah](https://github.com/cxueminc), [Sky Lim](https://github.com/skylimm)
+
 ## Directory Structure
 
 BigDataProject/
